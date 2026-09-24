@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador RM — Administración</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root{
+    --bg:#0c0f12; --panel:#161b20; --panel-2:#1d232a; --border:#2a323a;
+    --text:#e7ebee; --text-dim:#93a0aa; --accent:#33c9c0; --accent-strong:#4be0d6;
+    --danger:#e2727d; --warn:#d9a441;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;background:var(--bg);color:var(--text);min-height:100%;
+    font-family:'Segoe UI',Roboto,-apple-system,sans-serif;}
+  body{display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;}
+  .wrap{width:100%;max-width:640px;}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:28px;margin-bottom:20px;}
+  h1{font-size:19px;margin:0 0 4px;}
+  p.sub{color:var(--text-dim);font-size:13px;margin:0 0 20px;}
+  label{display:block;font-size:12.5px;color:var(--text-dim);margin:14px 0 6px;}
+  input{width:100%;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:8px;color:var(--text);padding:10px 12px;font-size:14px;}
+  input:focus{outline:none;border-color:var(--accent);}
+  button.primary{margin-top:20px;background:var(--accent);border:none;color:#06201d;
+    font-weight:700;font-size:13.5px;padding:10px 18px;border-radius:8px;cursor:pointer;}
+  button.primary:disabled{opacity:.55;cursor:default;}
+  #msg{margin-top:14px;font-size:13px;border-radius:8px;padding:10px 12px;display:none;}
+  #msg.error{display:block;background:rgba(226,114,125,.12);color:var(--danger);
+    border:1px solid rgba(226,114,125,.35);}
+  #msg.ok{display:block;background:rgba(51,201,192,.10);color:var(--accent-strong);
+    border:1px solid rgba(51,201,192,.3);}
+  table{width:100%;border-collapse:collapse;font-size:13px;}
+  th,td{text-align:left;padding:8px 6px;border-bottom:1px solid var(--border);}
+  th{color:var(--text-dim);font-weight:600;font-size:11.5px;text-transform:uppercase;}
+  .tag{font-size:11px;padding:2px 7px;border-radius:5px;}
+  .tag.vig{background:rgba(51,201,192,.12);color:var(--accent-strong);}
+  .tag.ven{background:rgba(226,114,125,.12);color:var(--danger);}
+  .tag.adm{background:rgba(217,164,65,.12);color:var(--warn);}
+  #gate{display:none;}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div id="login-gate" class="card">
+    <h1>Administración — Simulador RM</h1>
+    <p class="sub">Iniciá sesión con tu cuenta de administrador.</p>
+    <form id="login-form">
+      <label>Email</label>
+      <input type="email" id="admin-email" required>
+      <label>Contraseña</label>
+      <input type="password" id="admin-password" required>
+      <button type="submit" class="primary">Ingresar</button>
+    </form>
+    <div id="login-msg"></div>
+  </div>
+
+  <div id="gate">
+    <div class="card">
+      <h1>Agregar alumno</h1>
+      <p class="sub">Crea el usuario y le asigna fecha de vencimiento de acceso.</p>
+      <form id="add-form">
+        <label>Email del alumno</label>
+        <input type="email" id="s-email" required>
+        <label>Contraseña que va a usar</label>
+        <input type="text" id="s-password" required minlength="6" placeholder="mínimo 6 caracteres">
+        <label>Acceso hasta (fecha)</label>
+        <input type="date" id="s-until" required>
+        <button type="submit" class="primary" id="btn-add">Crear acceso</button>
+      </form>
+      <div id="msg"></div>
+    </div>
+
+    <div class="card">
+      <h1>Alumnos con acceso</h1>
+      <p class="sub">Se actualiza al crear uno nuevo. Para renovar o revocar el acceso de alguien, ver README.md (se hace con una consulta SQL corta en Supabase).</p>
+      <table>
+        <thead><tr><th>Email</th><th>Acceso hasta</th><th>Estado</th></tr></thead>
+        <tbody id="students-body"></tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="js/config.js"></script>
+<script>
+(function(){
+  "use strict";
+  var cfg = window.SUPABASE_CONFIG;
+  var sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+
+  var loginGate = document.getElementById('login-gate');
+  var gate = document.getElementById('gate');
+  var loginMsg = document.getElementById('login-msg');
+  var msg = document.getElementById('msg');
+
+  function showMsg(el, text, kind){
+    el.textContent = text; el.className = kind;
+  }
+
+  function fechaLegible(iso){
+    try{ return new Date(iso).toLocaleDateString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric'}); }
+    catch(e){ return iso; }
+  }
+
+  function cargarAlumnos(){
+    sb.from('profiles').select('*').order('created_at', {ascending:false}).then(function(res){
+      var tbody = document.getElementById('students-body');
+      tbody.innerHTML = '';
+      (res.data||[]).forEach(function(p){
+        var vencido = !p.is_admin && new Date(p.access_until) < new Date();
+        var tag = p.is_admin ? '<span class="tag adm">admin</span>'
+          : (vencido ? '<span class="tag ven">vencido</span>' : '<span class="tag vig">vigente</span>');
+        var tr = document.createElement('tr');
+        tr.innerHTML = '<td>'+p.email+'</td><td>'+fechaLegible(p.access_until)+'</td><td>'+tag+'</td>';
+        tbody.appendChild(tr);
+      });
+    });
+  }
+
+  function checkAdminAndShow(){
+    sb.auth.getUser().then(function(u){
+      var user = u.data && u.data.user;
+      if(!user){ loginGate.style.display='block'; gate.style.display='none'; return; }
+      sb.from('profiles').select('is_admin').eq('id', user.id).single().then(function(res){
+        if(res.error || !res.data || !res.data.is_admin){
+          showMsg(loginMsg, 'Esta cuenta no tiene permisos de administrador.', 'error');
+          sb.auth.signOut();
+          loginGate.style.display='block'; gate.style.display='none';
+          return;
+        }
+        loginGate.style.display='none'; gate.style.display='block';
+        cargarAlumnos();
+      });
+    });
+  }
+
+  document.getElementById('login-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    sb.auth.signInWithPassword({
+      email: document.getElementById('admin-email').value.trim(),
+      password: document.getElementById('admin-password').value,
+    }).then(function(res){
+      if(res.error){ showMsg(loginMsg, 'Usuario o contraseña incorrectos.', 'error'); return; }
+      checkAdminAndShow();
+    });
+  });
+
+  document.getElementById('add-form').addEventListener('submit', function(e){
+    e.preventDefault();
+    var email = document.getElementById('s-email').value.trim();
+    var password = document.getElementById('s-password').value;
+    var until = document.getElementById('s-until').value; // yyyy-mm-dd
+    var btn = document.getElementById('btn-add');
+    btn.disabled = true; btn.textContent = 'Creando…';
+    msg.className = '';
+
+    sb.auth.getSession().then(function(res){
+      var token = res.data && res.data.session && res.data.session.access_token;
+      if(!token){ showMsg(msg, 'Sesión vencida, volvé a ingresar.', 'error'); btn.disabled=false; btn.textContent='Crear acceso'; return; }
+
+      fetch(cfg.createStudentFunctionUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + token,
+        },
+        body: JSON.stringify({
+          email: email,
+          password: password,
+          access_until: until + 'T23:59:59', // vence al final del día elegido
+        }),
+      }).then(function(r){ return r.json().then(function(body){ return {status:r.status, body:body}; }); })
+      .then(function(res){
+        btn.disabled = false; btn.textContent = 'Crear acceso';
+        if(res.status !== 200){
+          showMsg(msg, res.body.error || 'No se pudo crear el acceso.', 'error');
+          return;
+        }
+        showMsg(msg, 'Acceso creado para ' + email + '.', 'ok');
+        document.getElementById('add-form').reset();
+        cargarAlumnos();
+      }).catch(function(err){
+        btn.disabled = false; btn.textContent = 'Crear acceso';
+        showMsg(msg, 'Error de red al llamar a la función: ' + err, 'error');
+      });
+    });
+  });
+
+  checkAdminAndShow();
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Simulador RM — Acceso</title>
+<meta name="robots" content="noindex, nofollow">
+<style>
+  :root{
+    --bg:#0c0f12; --panel:#161b20; --panel-2:#1d232a; --border:#2a323a;
+    --text:#e7ebee; --text-dim:#93a0aa; --accent:#33c9c0; --accent-strong:#4be0d6;
+    --danger:#e2727d; --warn:#d9a441;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--text);
+    font-family:'Segoe UI',Roboto,-apple-system,sans-serif;}
+  body{display:flex;align-items:center;justify-content:center;padding:16px;}
+
+  #login-card{width:100%;max-width:380px;background:var(--panel);
+    border:1px solid var(--border);border-radius:14px;padding:32px 28px;}
+  #login-card h1{font-size:19px;margin:0 0 4px;}
+  #login-card p.sub{color:var(--text-dim);font-size:13px;margin:0 0 24px;}
+  label{display:block;font-size:12.5px;color:var(--text-dim);margin:14px 0 6px;}
+  input[type=email],input[type=password]{
+    width:100%;background:var(--panel-2);border:1px solid var(--border);
+    border-radius:8px;color:var(--text);padding:10px 12px;font-size:14px;}
+  input:focus{outline:none;border-color:var(--accent);}
+  button.primary{width:100%;margin-top:22px;background:var(--accent);
+    border:none;color:#06201d;font-weight:700;font-size:14px;padding:11px;
+    border-radius:8px;cursor:pointer;}
+  button.primary:disabled{opacity:.55;cursor:default;}
+  button.link{background:none;border:none;color:var(--text-dim);
+    font-size:12.5px;text-decoration:underline;cursor:pointer;padding:0;margin-top:14px;}
+  #msg{margin-top:16px;font-size:13px;border-radius:8px;padding:10px 12px;display:none;}
+  #msg.error{display:block;background:rgba(226,114,125,.12);color:var(--danger);
+    border:1px solid rgba(226,114,125,.35);}
+  #msg.warn{display:block;background:rgba(217,164,65,.12);color:var(--warn);
+    border:1px solid rgba(217,164,65,.35);}
+  #msg.info{display:block;background:rgba(51,201,192,.10);color:var(--accent-strong);
+    border:1px solid rgba(51,201,192,.3);}
+
+  #loading, #app-frame-wrap{display:none;}
+  #loading{position:fixed;inset:0;display:flex;flex-direction:column;gap:14px;
+    align-items:center;justify-content:center;background:var(--bg);}
+  .spinner{width:34px;height:34px;border-radius:50%;border:3px solid var(--border);
+    border-top-color:var(--accent);animation:spin .8s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+
+  #app-frame-wrap{position:fixed;inset:0;background:var(--bg);}
+  #topbar{height:44px;display:flex;align-items:center;justify-content:space-between;
+    padding:0 14px;border-bottom:1px solid var(--border);background:var(--panel);}
+  #topbar .who{font-size:12.5px;color:var(--text-dim);}
+  #topbar button{background:var(--panel-2);border:1px solid var(--border);
+    color:var(--text);border-radius:6px;padding:6px 12px;font-size:12.5px;cursor:pointer;}
+  #app-frame{width:100%;height:calc(100% - 44px);border:none;display:block;}
+  .footnote{color:var(--text-dim);font-size:11px;margin-top:18px;line-height:1.5;}
+</style>
+</head>
+<body>
+
+<div id="login-card">
+  <h1>Simulador RM</h1>
+  <p class="sub">Acceso con usuario y contraseña provistos por el docente.</p>
+  <form id="login-form">
+    <label for="email">Email</label>
+    <input type="email" id="email" autocomplete="username" required>
+    <label for="password">Contraseña</label>
+    <input type="password" id="password" autocomplete="current-password" required>
+    <button type="submit" class="primary" id="btn-login">Ingresar</button>
+  </form>
+  <div id="msg"></div>
+  <p class="footnote">Si no tenés usuario o tu acceso venció, contactá a quien te dio este link.</p>
+</div>
+
+<div id="loading">
+  <div class="spinner"></div>
+  <div style="color:var(--text-dim);font-size:13px;">Cargando simulador…</div>
+</div>
+
+<div id="app-frame-wrap">
+  <div id="topbar">
+    <span class="who" id="who-label"></span>
+    <button id="btn-logout">Cerrar sesión</button>
+  </div>
+  <iframe id="app-frame" title="Simulador RM"></iframe>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
+<script src="js/config.js"></script>
+<script>
+(function(){
+  "use strict";
+  var cfg = window.SUPABASE_CONFIG;
+  var sb = window.supabase.createClient(cfg.url, cfg.anonKey);
+
+  var els = {
+    loginCard: document.getElementById('login-card'),
+    loading: document.getElementById('loading'),
+    appWrap: document.getElementById('app-frame-wrap'),
+    frame: document.getElementById('app-frame'),
+    form: document.getElementById('login-form'),
+    email: document.getElementById('email'),
+    password: document.getElementById('password'),
+    btnLogin: document.getElementById('btn-login'),
+    btnLogout: document.getElementById('btn-logout'),
+    who: document.getElementById('who-label'),
+    msg: document.getElementById('msg'),
+  };
+
+  function showMsg(text, kind){
+    els.msg.textContent = text;
+    els.msg.className = kind || 'error';
+  }
+  function clearMsg(){ els.msg.className=''; els.msg.textContent=''; }
+
+  function showScreen(name){
+    els.loginCard.style.display = (name==='login') ? 'block' : 'none';
+    els.loading.style.display = (name==='loading') ? 'flex' : 'none';
+    els.appWrap.style.display = (name==='app') ? 'block' : 'none';
+  }
+
+  // Trae el perfil (fecha de vencimiento, admin) del usuario logueado.
+  // Se filtra explícitamente por el propio id: si no se filtrara, una
+  // cuenta admin (que por política puede leer TODOS los perfiles) traería
+  // más de un renglón y .single() fallaría.
+  function getProfile(){
+    return sb.auth.getUser().then(function(u){
+      var uid = u.data && u.data.user && u.data.user.id;
+      if(!uid) return {error:{message:'sin usuario'}};
+      return sb.from('profiles').select('*').eq('id', uid).single();
+    });
+  }
+
+  function fechaLegible(iso){
+    try{
+      var d = new Date(iso);
+      return d.toLocaleDateString('es-ES', {day:'2-digit', month:'2-digit', year:'numeric'});
+    }catch(e){ return iso; }
+  }
+
+  // Descarga el archivo del simulador desde el bucket privado (solo
+  // funciona si la sesión es válida y no venció — lo exige la política de
+  // Storage del lado del servidor, no algo que dependa de este código) y lo
+  // muestra en el iframe mediante una URL de blob local.
+  function cargarSimulador(profile){
+    showScreen('loading');
+    sb.storage.from('simulator-files').download(cfg.simulatorFileName).then(function(res){
+      if(res.error || !res.data){
+        showScreen('login');
+        showMsg('No se pudo cargar el simulador (' + (res.error ? res.error.message : 'archivo no encontrado') + '). Avisale a quien te dio el acceso.', 'error');
+        return;
+      }
+      var blobUrl = URL.createObjectURL(res.data);
+      els.frame.src = blobUrl;
+      els.who.textContent = profile.email + (profile.is_admin ? ' · admin' : ' · acceso hasta ' + fechaLegible(profile.access_until));
+      showScreen('app');
+    });
+  }
+
+  function afterLogin(){
+    showScreen('loading');
+    getProfile().then(function(res){
+      if(res.error || !res.data){
+        // Login válido pero sin perfil: no debería pasar en uso normal
+        // (los perfiles se crean junto con la cuenta), pero por las dudas
+        // se avisa en vez de dejar pasar sin chequeo de vencimiento.
+        sb.auth.signOut();
+        showScreen('login');
+        showMsg('Tu cuenta no tiene un perfil de acceso asociado. Avisale a quien te dio el acceso.', 'error');
+        return;
+      }
+      var profile = res.data;
+      var vencido = !profile.is_admin && new Date(profile.access_until) < new Date();
+      if(vencido){
+        sb.auth.signOut();
+        showScreen('login');
+        showMsg('Tu acceso venció el ' + fechaLegible(profile.access_until) + '. Contactá a quien te dio el acceso para renovarlo.', 'warn');
+        return;
+      }
+      cargarSimulador(profile);
+    });
+  }
+
+  els.form.addEventListener('submit', function(e){
+    e.preventDefault();
+    clearMsg();
+    els.btnLogin.disabled = true;
+    els.btnLogin.textContent = 'Ingresando…';
+    sb.auth.signInWithPassword({
+      email: els.email.value.trim(),
+      password: els.password.value,
+    }).then(function(res){
+      els.btnLogin.disabled = false;
+      els.btnLogin.textContent = 'Ingresar';
+      if(res.error){
+        showMsg('Usuario o contraseña incorrectos.', 'error');
+        return;
+      }
+      afterLogin();
+    });
+  });
+
+  els.btnLogout.addEventListener('click', function(){
+    sb.auth.signOut().then(function(){
+      els.frame.src = 'about:blank';
+      showScreen('login');
+    });
+  });
+
+  // Si ya había una sesión guardada en este navegador (de una visita
+  // anterior), entrar directo sin pedir usuario/contraseña de nuevo —
+  // pero el chequeo de vencimiento se vuelve a hacer igual.
+  showScreen('loading');
+  sb.auth.getSession().then(function(res){
+    if(res.data && res.data.session){
+      afterLogin();
+    } else {
+      showScreen('login');
+    }
+  });
+})();
+</script>
+</body>
+</html>
