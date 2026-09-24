@@ -138,22 +138,59 @@
     }catch(e){ return iso; }
   }
 
-  // Descarga el archivo del simulador desde el bucket privado (solo
-  // funciona si la sesión es válida y no venció — lo exige la política de
-  // Storage del lado del servidor, no algo que dependa de este código) y lo
-  // muestra en el iframe mediante una URL de blob local.
+  // Registra en el servidor que este usuario efectivamente entró al
+  // simulador (no solo hizo login) — queda visible en admin.html. Se llama
+  // recién cuando el simulador (adentro del iframe) avisa que arrancó y de
+  // qué versión es, así el registro siempre tiene la versión real.
+  function registrarUso(profile, version){
+    sb.from('usage_log').insert({
+      user_id: profile.id,
+      email: profile.email,
+      course: profile.course || null,
+      app_version: version || null,
+    }).then(function(){}); // best-effort: si falla, no interrumpe el uso
+  }
+
+  // Pide al servidor una URL temporal (vence sola a los 10 minutos) para
+  // bajar el archivo del simulador, en vez de una descarga directa. La URL
+  // solo se genera si la política de Storage del servidor la autoriza
+  // (sesión vigente y no vencida) — igual que antes, ese chequeo lo sigue
+  // haciendo el servidor, no el navegador.
   function cargarSimulador(profile){
     showScreen('loading');
-    sb.storage.from('simulator-files').download(cfg.simulatorFileName).then(function(res){
+    sb.storage.from('simulator-files').createSignedUrl(cfg.simulatorFileName, 600).then(function(res){
       if(res.error || !res.data){
         showScreen('login');
-        showMsg('No se pudo cargar el simulador (' + (res.error ? res.error.message : 'archivo no encontrado') + '). Avisale a quien te dio el acceso.', 'error');
+        showMsg('No se pudo generar el acceso al simulador (' + (res.error ? res.error.message : 'archivo no encontrado') + '). Avisale a quien te dio el acceso.', 'error');
         return;
       }
-      var blobUrl = URL.createObjectURL(res.data);
-      els.frame.src = blobUrl;
-      els.who.textContent = profile.email + (profile.is_admin ? ' · admin' : ' · acceso hasta ' + fechaLegible(profile.access_until));
-      showScreen('app');
+      return fetch(res.data.signedUrl).then(function(r){
+        if(!r.ok) throw new Error('HTTP ' + r.status);
+        return r.blob();
+      }).then(function(blob){
+        // Se fuerza el tipo a text/html sin importar con qué "content-type"
+        // haya quedado guardado el archivo en Supabase Storage (algunas
+        // subidas lo guardan como application/octet-stream o text/plain,
+        // lo que hace que el navegador muestre el código fuente como texto
+        // en vez de ejecutarlo). Como acá siempre sabemos que es HTML, se
+        // lo indicamos explícitamente en vez de confiar en el servidor.
+        var htmlBlob = new Blob([blob], {type: 'text/html'});
+        var blobUrl = URL.createObjectURL(htmlBlob);
+        var recibioVersion = false;
+        window.addEventListener('message', function onMsg(ev){
+          var d = ev.data;
+          if(!d || d.type !== 'simulador-rm:ready') return;
+          if(recibioVersion) return; // solo la primera vez por carga
+          recibioVersion = true;
+          registrarUso(profile, d.version);
+        });
+        els.frame.src = blobUrl;
+        els.who.textContent = profile.email + (profile.is_admin ? ' · admin' : ' · acceso hasta ' + fechaLegible(profile.access_until));
+        showScreen('app');
+      });
+    }).catch(function(err){
+      showScreen('login');
+      showMsg('No se pudo cargar el simulador: ' + err + '. Avisale a quien te dio el acceso.', 'error');
     });
   }
 
