@@ -194,6 +194,13 @@
       enviarAlSimulador({type:'simulador-rm:estudios-servidor',
         estudios: (res.data||[]).map(function(r){ return r.data; })});
     });
+    // Estudios que el docente compartió (el servidor solo deja ver los
+    // compartidos por una cuenta admin). Se excluyen los propios.
+    sb.from('estudios').select('data').eq('compartido', true).neq('user_id', profile.id).then(function(res){
+      if(res.error) return;
+      enviarAlSimulador({type:'simulador-rm:estudios-docente',
+        estudios: (res.data||[]).map(function(r){ return r.data; })});
+    });
   }
   // admin.html abre index.html#ver=<id> para revisar el estudio de un alumno.
   function abrirEstudioPedido(profile){

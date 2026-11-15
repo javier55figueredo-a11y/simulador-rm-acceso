@@ -48,6 +48,12 @@
   button.mini.del{color:var(--danger);border-color:rgba(226,114,125,.35);}
   td.acc{white-space:nowrap;text-align:right;}
   .vacio{color:var(--text-dim);font-size:13px;padding:10px 0;}
+  .auto{margin-left:auto;font-size:12.5px;color:var(--text-dim);display:flex;align-items:center;gap:6px;}
+  .auto .dot{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 6px var(--accent);}
+  .sw{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--text-dim);cursor:pointer;user-select:none;}
+  .sw .t{width:30px;height:16px;border-radius:9px;background:var(--border);position:relative;transition:background .15s;}
+  .sw .t::after{content:'';position:absolute;left:2px;top:2px;width:12px;height:12px;border-radius:50%;background:var(--text-dim);transition:left .15s;}
+  .sw.on{color:var(--accent-strong);} .sw.on .t{background:var(--accent);} .sw.on .t::after{left:16px;background:#06201d;}
 </style>
 </head>
 <body>
@@ -93,13 +99,13 @@
 
     <div class="card">
       <h1>Estudios de alumnos</h1>
-      <p class="sub">Estudios que los alumnos guardaron en el simulador. “Ver” lo abre en el simulador en modo revisión (lo que cambies ahí no se guarda en la cuenta del alumno).</p>
+      <p class="sub">Estudios guardados en el simulador. “Ver” lo abre en modo revisión (lo que cambies ahí no se guarda). Con “Compartido” activado, tus estudios aparecen a todos los alumnos con la etiqueta <span style="color:var(--warn)">docente</span>.</p>
       <div class="filtros">
         <select id="f-alumno"><option value="">Todos los alumnos</option></select>
-        <button class="mini" id="btn-recargar">Actualizar</button>
+        <span class="auto"><span class="dot"></span><span id="auto-txt">Se actualiza sola</span></span>
       </div>
       <table>
-        <thead><tr><th>Alumno</th><th>Paciente</th><th>Protocolo</th><th>Estado</th><th>Actualizado</th><th></th></tr></thead>
+        <thead><tr><th>Alumno</th><th>Paciente</th><th>Protocolo</th><th>Estado</th><th>Actualizado</th><th>Compartido</th><th></th></tr></thead>
         <tbody id="estudios-body"></tbody>
       </table>
       <div id="estudios-vacio" class="vacio" style="display:none">Todavía no hay estudios guardados.</div>
@@ -150,6 +156,7 @@
     dorsal:'Columna dorsal', lumbar:'Columna lumbar', hombro:'Hombro', rodilla:'Rodilla',
     tobillo:'Tobillo', pie:'Pie', abdomen:'Abdomen', pelvis:'Pelvis ósea', prostata:'Próstata', utero:'Útero'};
   var todosEstudios = [];
+  var miId = null;
   function fechaHora(iso){
     try{ return new Date(iso).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
     catch(e){ return iso; }
@@ -159,17 +166,37 @@
     var filtro = document.getElementById('f-alumno').value;
     var tbody = document.getElementById('estudios-body');
     tbody.innerHTML = '';
-    var lista = todosEstudios.filter(function(e){ return !filtro || e.email===filtro; });
+    var lista = todosEstudios.filter(function(e){
+      if(filtro==='__mios') return e.user_id===miId;
+      return !filtro || e.email===filtro;
+    });
     document.getElementById('estudios-vacio').style.display = lista.length ? 'none' : 'block';
     lista.forEach(function(e){
       var tr = document.createElement('tr');
-      tr.appendChild(td(e.email));
+      var esMio = e.user_id===miId;
+      if(esMio){ var cv=document.createElement('td'); var bb=document.createElement('b'); bb.textContent='Vos'; cv.appendChild(bb); tr.appendChild(cv); }
+      else tr.appendChild(td(e.email));
       tr.appendChild(td(e.paciente || 'Sin nombre'));
       tr.appendChild(td(PROTO_NOMBRES[e.protocolo] || e.protocolo));
       var est = document.createElement('td');
       est.innerHTML = e.completado ? '<span class="tag vig">completado</span>' : '<span class="tag adm">en curso</span>';
       tr.appendChild(est);
       tr.appendChild(td(fechaHora(e.updated_at)));
+      var comp = document.createElement('td');
+      if(esMio){
+        var sw = document.createElement('span'); sw.className = 'sw' + (e.compartido ? ' on' : '');
+        sw.innerHTML = '<span class="t"></span><span class="l"></span>';
+        sw.querySelector('.l').textContent = e.compartido ? 'Sí' : 'No';
+        sw.onclick = function(){
+          var nuevo = !e.compartido;
+          sb.from('estudios').update({compartido: nuevo}).eq('id', e.id).then(function(res){
+            if(res.error){ alert('No se pudo cambiar: ' + res.error.message); return; }
+            e.compartido = nuevo; pintarEstudios();
+          });
+        };
+        comp.appendChild(sw);
+      } else comp.textContent = '—';
+      tr.appendChild(comp);
       var acc = document.createElement('td'); acc.className='acc';
       var bVer = document.createElement('button'); bVer.className='mini'; bVer.textContent='Ver';
       bVer.onclick = function(){ window.open('index.html#ver=' + e.id, '_blank'); };
@@ -187,20 +214,28 @@
     });
   }
   function cargarEstudios(){
-    sb.from('estudios').select('id,email,paciente,protocolo,completado,updated_at')
+    sb.from('estudios').select('id,user_id,email,paciente,protocolo,completado,compartido,updated_at')
       .order('updated_at', {ascending:false}).then(function(res){
         if(res.error){ document.getElementById('estudios-vacio').textContent='No se pudieron cargar los estudios: ' + res.error.message; document.getElementById('estudios-vacio').style.display='block'; return; }
         todosEstudios = res.data || [];
         var sel = document.getElementById('f-alumno'), actual = sel.value;
-        var emails = {}; todosEstudios.forEach(function(e){ if(e.email) emails[e.email]=1; });
-        sel.innerHTML = '<option value="">Todos los alumnos</option>';
+        var emails = {}; todosEstudios.forEach(function(e){ if(e.email && e.user_id!==miId) emails[e.email]=1; });
+        sel.innerHTML = '<option value="">Todos los alumnos</option><option value="__mios">Solo mis estudios</option>';
         Object.keys(emails).sort().forEach(function(m){ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.appendChild(o); });
-        sel.value = emails[actual] ? actual : '';
+        sel.value = (emails[actual] || actual==='__mios') ? actual : '';
+        var ahora = new Date();
+        document.getElementById('auto-txt').textContent = 'Se actualiza sola · última: ' +
+          ahora.toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'});
         pintarEstudios();
       });
   }
   document.getElementById('f-alumno').addEventListener('change', pintarEstudios);
-  document.getElementById('btn-recargar').addEventListener('click', cargarEstudios);
+  var autoTimer = null;
+  function iniciarAutoActualizacion(){
+    if(autoTimer) return;
+    autoTimer = setInterval(function(){ if(!document.hidden) cargarEstudios(); }, 30000);
+    document.addEventListener('visibilitychange', function(){ if(!document.hidden) cargarEstudios(); });
+  }
 
   function checkAdminAndShow(){
     sb.auth.getUser().then(function(u){
@@ -214,8 +249,10 @@
           return;
         }
         loginGate.style.display='none'; gate.style.display='block';
+        miId = user.id;
         cargarAlumnos();
         cargarEstudios();
+        iniciarAutoActualizacion();
       });
     });
   }
