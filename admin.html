@@ -15,7 +15,7 @@
   html,body{margin:0;background:var(--bg);color:var(--text);min-height:100%;
     font-family:'Segoe UI',Roboto,-apple-system,sans-serif;}
   body{display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;}
-  .wrap{width:100%;max-width:640px;}
+  .wrap{width:100%;max-width:880px;}
   .card{background:var(--panel);border:1px solid var(--border);border-radius:14px;
     padding:28px;margin-bottom:20px;}
   h1{font-size:19px;margin:0 0 4px;}
@@ -40,6 +40,14 @@
   .tag.ven{background:rgba(226,114,125,.12);color:var(--danger);}
   .tag.adm{background:rgba(217,164,65,.12);color:var(--warn);}
   #gate{display:none;}
+  .filtros{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
+  select{background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:8px 10px;font-size:13px;}
+  button.mini{background:var(--panel-2);border:1px solid var(--border);color:var(--text);
+    border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;margin-left:4px;}
+  button.mini.del{color:var(--danger);border-color:rgba(226,114,125,.35);}
+  td.acc{white-space:nowrap;text-align:right;}
+  .vacio{color:var(--text-dim);font-size:13px;padding:10px 0;}
 </style>
 </head>
 <body>
@@ -82,6 +90,20 @@
         <tbody id="students-body"></tbody>
       </table>
     </div>
+
+    <div class="card">
+      <h1>Estudios de alumnos</h1>
+      <p class="sub">Estudios que los alumnos guardaron en el simulador. “Ver” lo abre en el simulador en modo revisión (lo que cambies ahí no se guarda en la cuenta del alumno).</p>
+      <div class="filtros">
+        <select id="f-alumno"><option value="">Todos los alumnos</option></select>
+        <button class="mini" id="btn-recargar">Actualizar</button>
+      </div>
+      <table>
+        <thead><tr><th>Alumno</th><th>Paciente</th><th>Protocolo</th><th>Estado</th><th>Actualizado</th><th></th></tr></thead>
+        <tbody id="estudios-body"></tbody>
+      </table>
+      <div id="estudios-vacio" class="vacio" style="display:none">Todavía no hay estudios guardados.</div>
+    </div>
   </div>
 
 </div>
@@ -123,6 +145,63 @@
     });
   }
 
+  // ---------- Estudios de alumnos ----------
+  var PROTO_NOMBRES = {craneo:'Cráneo', orbitas:'Órbitas', oidos:'Oídos', cervical:'Columna cervical',
+    dorsal:'Columna dorsal', lumbar:'Columna lumbar', hombro:'Hombro', rodilla:'Rodilla',
+    tobillo:'Tobillo', pie:'Pie', abdomen:'Abdomen', pelvis:'Pelvis ósea', prostata:'Próstata', utero:'Útero'};
+  var todosEstudios = [];
+  function fechaHora(iso){
+    try{ return new Date(iso).toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}); }
+    catch(e){ return iso; }
+  }
+  function td(text){ var c=document.createElement('td'); c.textContent = (text==null||text==='') ? '—' : text; return c; }
+  function pintarEstudios(){
+    var filtro = document.getElementById('f-alumno').value;
+    var tbody = document.getElementById('estudios-body');
+    tbody.innerHTML = '';
+    var lista = todosEstudios.filter(function(e){ return !filtro || e.email===filtro; });
+    document.getElementById('estudios-vacio').style.display = lista.length ? 'none' : 'block';
+    lista.forEach(function(e){
+      var tr = document.createElement('tr');
+      tr.appendChild(td(e.email));
+      tr.appendChild(td(e.paciente || 'Sin nombre'));
+      tr.appendChild(td(PROTO_NOMBRES[e.protocolo] || e.protocolo));
+      var est = document.createElement('td');
+      est.innerHTML = e.completado ? '<span class="tag vig">completado</span>' : '<span class="tag adm">en curso</span>';
+      tr.appendChild(est);
+      tr.appendChild(td(fechaHora(e.updated_at)));
+      var acc = document.createElement('td'); acc.className='acc';
+      var bVer = document.createElement('button'); bVer.className='mini'; bVer.textContent='Ver';
+      bVer.onclick = function(){ window.open('index.html#ver=' + e.id, '_blank'); };
+      var bDel = document.createElement('button'); bDel.className='mini del'; bDel.textContent='Borrar';
+      bDel.onclick = function(){
+        if(!confirm('¿Borrar del servidor el estudio "' + (e.paciente||'Sin nombre') + '" de ' + e.email + '? No se puede deshacer.')) return;
+        sb.from('estudios').delete().eq('id', e.id).then(function(res){
+          if(res.error){ alert('No se pudo borrar: ' + res.error.message); return; }
+          cargarEstudios();
+        });
+      };
+      acc.appendChild(bVer); acc.appendChild(bDel);
+      tr.appendChild(acc);
+      tbody.appendChild(tr);
+    });
+  }
+  function cargarEstudios(){
+    sb.from('estudios').select('id,email,paciente,protocolo,completado,updated_at')
+      .order('updated_at', {ascending:false}).then(function(res){
+        if(res.error){ document.getElementById('estudios-vacio').textContent='No se pudieron cargar los estudios: ' + res.error.message; document.getElementById('estudios-vacio').style.display='block'; return; }
+        todosEstudios = res.data || [];
+        var sel = document.getElementById('f-alumno'), actual = sel.value;
+        var emails = {}; todosEstudios.forEach(function(e){ if(e.email) emails[e.email]=1; });
+        sel.innerHTML = '<option value="">Todos los alumnos</option>';
+        Object.keys(emails).sort().forEach(function(m){ var o=document.createElement('option'); o.value=m; o.textContent=m; sel.appendChild(o); });
+        sel.value = emails[actual] ? actual : '';
+        pintarEstudios();
+      });
+  }
+  document.getElementById('f-alumno').addEventListener('change', pintarEstudios);
+  document.getElementById('btn-recargar').addEventListener('click', cargarEstudios);
+
   function checkAdminAndShow(){
     sb.auth.getUser().then(function(u){
       var user = u.data && u.data.user;
@@ -136,6 +215,7 @@
         }
         loginGate.style.display='none'; gate.style.display='block';
         cargarAlumnos();
+        cargarEstudios();
       });
     });
   }

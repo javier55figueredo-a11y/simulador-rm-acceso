@@ -151,6 +151,60 @@
     }).then(function(){}); // best-effort: si falla, no interrumpe el uso
   }
 
+  // ---------- Estudios guardados en el servidor (tabla "estudios") ----------
+  // El simulador avisa cada vez que guarda o elimina un estudio; acá se
+  // sube/borra en Supabase. Cada alumno solo puede tocar sus propios estudios
+  // (lo garantiza la política RLS del servidor, no este código).
+  function enviarAlSimulador(msg){
+    try{ els.frame.contentWindow.postMessage(msg, '*'); }catch(e){}
+  }
+  var pendientes = {}; // id local -> timer (agrupa los guardados automáticos)
+  function subirEstudio(profile, est){
+    var id = String(est.id || '');
+    if(!id) return;
+    clearTimeout(pendientes[id]);
+    pendientes[id] = setTimeout(function(){
+      delete pendientes[id];
+      var pac = (est.paciente && est.paciente.nombre) ? String(est.paciente.nombre).slice(0,120) : null;
+      sb.from('estudios').upsert({
+        user_id: profile.id,
+        email: profile.email,
+        local_id: id,
+        paciente: pac,
+        protocolo: est.protocoloId ? String(est.protocoloId).slice(0,40) : null,
+        completado: !!est.completado,
+        data: est,
+        updated_at: new Date().toISOString(),
+      }, {onConflict: 'user_id,local_id'}).then(function(res){
+        if(res.error) console.warn('No se pudo guardar el estudio en el servidor:', res.error.message);
+      });
+    }, 3000);
+  }
+  function borrarEstudio(profile, id){
+    clearTimeout(pendientes[id]); delete pendientes[id];
+    sb.from('estudios').delete().eq('user_id', profile.id).eq('local_id', id).then(function(res){
+      if(res.error) console.warn('No se pudo borrar el estudio del servidor:', res.error.message);
+    });
+  }
+  // Al entrar, se le pasan al simulador los estudios propios guardados en el
+  // servidor (así aparecen aunque el alumno use otra computadora).
+  function enviarEstudiosAlSimulador(profile){
+    sb.from('estudios').select('data').eq('user_id', profile.id).then(function(res){
+      if(res.error) return;
+      enviarAlSimulador({type:'simulador-rm:estudios-servidor',
+        estudios: (res.data||[]).map(function(r){ return r.data; })});
+    });
+  }
+  // admin.html abre index.html#ver=<id> para revisar el estudio de un alumno.
+  function abrirEstudioPedido(profile){
+    var m = /[#&]ver=([0-9a-f-]{36})/i.exec(location.hash || '');
+    if(!m || !profile.is_admin) return;
+    sb.from('estudios').select('data,email').eq('id', m[1]).single().then(function(res){
+      if(res.error || !res.data) return;
+      enviarAlSimulador({type:'simulador-rm:abrir-estudio', estudio: res.data.data, alumno: res.data.email});
+    });
+  }
+
   // Pide al servidor una URL temporal (vence sola a los 10 minutos) para
   // bajar el archivo del simulador, en vez de una descarga directa. La URL
   // solo se genera si la política de Storage del servidor la autoriza
@@ -178,11 +232,20 @@
         var blobUrl = URL.createObjectURL(htmlBlob);
         var recibioVersion = false;
         window.addEventListener('message', function onMsg(ev){
+          if(ev.source !== els.frame.contentWindow) return; // solo mensajes del simulador
           var d = ev.data;
-          if(!d || d.type !== 'simulador-rm:ready') return;
-          if(recibioVersion) return; // solo la primera vez por carga
-          recibioVersion = true;
-          registrarUso(profile, d.version);
+          if(!d || typeof d !== 'object') return;
+          if(d.type === 'simulador-rm:ready'){
+            if(recibioVersion) return; // solo la primera vez por carga
+            recibioVersion = true;
+            registrarUso(profile, d.version);
+            enviarEstudiosAlSimulador(profile);
+            abrirEstudioPedido(profile);
+          } else if(d.type === 'simulador-rm:estudio-guardado' && d.estudio){
+            subirEstudio(profile, d.estudio);
+          } else if(d.type === 'simulador-rm:estudio-eliminado' && d.id){
+            borrarEstudio(profile, String(d.id));
+          }
         });
         els.frame.src = blobUrl;
         els.who.textContent = profile.email + (profile.is_admin ? ' · admin' : ' · acceso hasta ' + fechaLegible(profile.access_until));
